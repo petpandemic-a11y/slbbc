@@ -313,6 +313,8 @@ class SolanaLPBurnMonitor:
             try:
                 slot = await self.solana_client.get_slot()
                 logger.info(f"✅ Solana RPC connected: slot {slot.value}")
+            except Exception as e:
+                logger.warning(f"Solana connection warning: {e}")
             
             # Send startup message
             try:
