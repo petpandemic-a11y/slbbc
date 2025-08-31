@@ -91,12 +91,13 @@ from telegram.error import TelegramError
 # Environment variables (set these in Render)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID")
-# Use better RPC endpoints
+# Use better RPC endpoints - updated list with working free RPCs
 RPC_URLS = [
     os.environ.get("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com"),
-    "https://solana-api.projectserum.com",
-    "https://rpc.ankr.com/solana",
-    "https://solana.public-rpc.com"
+    "https://solana-mainnet.g.alchemy.com/v2/demo",  # Alchemy demo
+    "https://rpc.helius.xyz/",  # Helius free tier
+    "https://mainnet.solana.rpcpool.com",  # RPC Pool
+    "https://solana-mainnet.rpc.extrnode.com",  # ExtrNode
 ]
 CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "30"))  # Increased to 30s
 MIN_BURN_PERCENT = float(os.environ.get("MIN_BURN_PERCENT", "90"))
@@ -191,10 +192,14 @@ class SolanaLPBurnMonitor:
     
     async def rotate_rpc(self):
         """Rotate to next RPC endpoint"""
-        await self.solana_client.close()
+        try:
+            await self.solana_client.close()
+        except:
+            pass
+        
         self.rpc_index = (self.rpc_index + 1) % len(self.rpc_urls)
         self.solana_client = AsyncClient(self.rpc_urls[self.rpc_index])
-        logger.info(f"Switched to RPC: {self.rpc_urls[self.rpc_index]}")
+        logger.info(f"🔄 Switched to RPC #{self.rpc_index}: {self.rpc_urls[self.rpc_index]}")
     
     async def check_transaction(self, signature: str) -> Optional[Dict]:
         """Check if transaction is an LP burn"""
@@ -326,15 +331,19 @@ class SolanaLPBurnMonitor:
                 logger.error(f"Monitor error (#{error_count}): {error_type}: {error_msg}")
                 
                 if "429" in error_msg or "Too Many Requests" in error_msg:
-                    logger.warning(f"Rate limited, rotating RPC and waiting...")
+                    logger.warning(f"⚠️ Rate limited, rotating RPC and waiting...")
                     await self.rotate_rpc()
                     await asyncio.sleep(30)
+                elif "403" in error_msg or "Forbidden" in error_msg:
+                    logger.warning(f"⚠️ Access forbidden, rotating RPC...")
+                    await self.rotate_rpc()
+                    await asyncio.sleep(5)
                 elif "503" in error_msg or "Service Unavailable" in error_msg:
-                    logger.warning(f"RPC unavailable, rotating...")
+                    logger.warning(f"⚠️ RPC unavailable, rotating...")
                     await self.rotate_rpc()
                     await asyncio.sleep(10)
                 elif "Connection" in error_msg or "Timeout" in error_msg:
-                    logger.warning(f"Connection issue, waiting...")
+                    logger.warning(f"⚠️ Connection issue, waiting...")
                     await asyncio.sleep(10)
                 
                 if error_count > 10:
@@ -358,8 +367,15 @@ class SolanaLPBurnMonitor:
             try:
                 slot = await self.solana_client.get_slot()
                 logger.info(f"✅ Solana RPC connected: slot {slot.value}")
+                logger.info(f"📡 Using RPC: {self.rpc_urls[self.rpc_index]}")
             except Exception as e:
-                logger.warning(f"Solana connection warning: {e}")
+                logger.warning(f"Initial RPC failed, rotating...")
+                await self.rotate_rpc()
+                try:
+                    slot = await self.solana_client.get_slot()
+                    logger.info(f"✅ Solana RPC connected after rotation: slot {slot.value}")
+                except:
+                    logger.warning(f"Solana connection warning, continuing anyway...")
             
             # Send startup message
             try:
