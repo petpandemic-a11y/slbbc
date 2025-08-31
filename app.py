@@ -117,7 +117,11 @@ BURN_ADDRESSES = [
 # ============= LOGGING =============
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('bot.log', mode='a')
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -231,7 +235,7 @@ class SolanaLPBurnMonitor:
             
             if has_burn and has_raydium:
                 # Found potential burn transaction
-                logger.info(f"Potential burn found: {signature}")
+                logger.info(f"🔥 Potential burn found: {signature[:20]}...")
                 
                 # Extract token address (simplified - would need proper parsing)
                 token_address = accounts[0] if accounts else "unknown"
@@ -244,7 +248,7 @@ class SolanaLPBurnMonitor:
                 }
                 
         except Exception as e:
-            logger.error(f"Error checking tx {signature}: {e}")
+            logger.debug(f"Error checking tx {signature[:20]}...: {type(e).__name__}: {str(e)}")
             
         return None
     
@@ -294,11 +298,13 @@ class SolanaLPBurnMonitor:
                 )
                 
                 if signatures and signatures.value:
+                    logger.info(f"Found {len(signatures.value)} transactions to check")
                     for sig_info in signatures.value:
                         sig = str(sig_info.signature)
                         
                         if sig not in self.processed_signatures:
                             self.processed_signatures.add(sig)
+                            logger.debug(f"Checking signature: {sig[:10]}...")
                             
                             # Check if it's a burn
                             burn_data = await self.check_transaction(sig)
@@ -314,16 +320,26 @@ class SolanaLPBurnMonitor:
                 
             except Exception as e:
                 error_count += 1
+                error_msg = str(e)
+                error_type = type(e).__name__
                 
-                if "429" in str(e) or "Too Many Requests" in str(e):
+                logger.error(f"Monitor error (#{error_count}): {error_type}: {error_msg}")
+                
+                if "429" in error_msg or "Too Many Requests" in error_msg:
                     logger.warning(f"Rate limited, rotating RPC and waiting...")
                     await self.rotate_rpc()
                     await asyncio.sleep(30)
-                else:
-                    logger.error(f"Monitor error (#{error_count}): {e}")
+                elif "503" in error_msg or "Service Unavailable" in error_msg:
+                    logger.warning(f"RPC unavailable, rotating...")
+                    await self.rotate_rpc()
+                    await asyncio.sleep(10)
+                elif "Connection" in error_msg or "Timeout" in error_msg:
+                    logger.warning(f"Connection issue, waiting...")
+                    await asyncio.sleep(10)
                 
                 if error_count > 10:
-                    logger.error("Too many errors, waiting 60s...")
+                    logger.error("Too many errors, rotating RPC and waiting 60s...")
+                    await self.rotate_rpc()
                     await asyncio.sleep(60)
                     error_count = 0
             
