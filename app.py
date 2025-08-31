@@ -83,6 +83,7 @@ import aiohttp
 from solana.rpc.async_api import AsyncClient
 from solana.rpc.commitment import Confirmed
 from solders.pubkey import Pubkey
+from solders.signature import Signature
 from telegram import Bot
 from telegram.error import TelegramError
 
@@ -178,8 +179,11 @@ class SolanaLPBurnMonitor:
     async def check_transaction(self, signature: str) -> Optional[Dict]:
         """Check if transaction is an LP burn"""
         try:
+            # Convert string to Signature object
+            sig_obj = Signature.from_string(signature)
+            
             tx = await self.solana_client.get_transaction(
-                signature,
+                sig_obj,
                 commitment=Confirmed,
                 max_supported_transaction_version=0
             )
