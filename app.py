@@ -270,7 +270,7 @@ class SolanaLPBurnMonitor:
                     limit=10
                 )
                 
-                if signatures.value:
+                if signatures and signatures.value:
                     for sig_info in signatures.value:
                         sig = str(sig_info.signature)
                         
@@ -310,8 +310,9 @@ class SolanaLPBurnMonitor:
             logger.info(f"✅ Telegram bot connected: @{me.username}")
             
             # Test Solana connection
-            health = await self.solana_client.get_health()
-            logger.info(f"✅ Solana RPC connected: {health}")
+            try:
+                slot = await self.solana_client.get_slot()
+                logger.info(f"✅ Solana RPC connected: slot {slot.value}")
             
             # Send startup message
             try:
@@ -324,8 +325,8 @@ class SolanaLPBurnMonitor:
                          f"<i>Ready to detect LP burns...</i>",
                     parse_mode='HTML'
                 )
-            except:
-                logger.warning("Could not send startup message")
+            except Exception as e:
+                logger.warning(f"Could not send startup message: {e}")
             
             # Start monitoring
             await self.monitor_loop()
