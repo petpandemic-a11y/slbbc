@@ -91,8 +91,14 @@ from telegram.error import TelegramError
 # Environment variables (set these in Render)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID")
-SOLANA_RPC_URL = os.environ.get("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
-CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "10"))
+# Use better RPC endpoints
+RPC_URLS = [
+    os.environ.get("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com"),
+    "https://solana-api.projectserum.com",
+    "https://rpc.ankr.com/solana",
+    "https://solana.public-rpc.com"
+]
+CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "30"))  # Increased to 30s
 MIN_BURN_PERCENT = float(os.environ.get("MIN_BURN_PERCENT", "90"))
 
 # Raydium addresses
@@ -138,10 +144,13 @@ class SolanaLPBurnMonitor:
             sys.exit(1)
         
         self.telegram_bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        self.solana_client = AsyncClient(SOLANA_RPC_URL)
+        self.rpc_index = 0
+        self.rpc_urls = RPC_URLS
+        self.solana_client = AsyncClient(self.rpc_urls[0])
         self.processed_signatures = set()
         self.token_cache = {}
         self.session = None
+        self.rate_limit_delay = 2  # seconds between requests
         
     async def setup(self):
         """Initialize aiohttp session"""
@@ -176,9 +185,19 @@ class SolanaLPBurnMonitor:
         
         return {"symbol": "???", "name": "Unknown", "decimals": 9}
     
+    async def rotate_rpc(self):
+        """Rotate to next RPC endpoint"""
+        await self.solana_client.close()
+        self.rpc_index = (self.rpc_index + 1) % len(self.rpc_urls)
+        self.solana_client = AsyncClient(self.rpc_urls[self.rpc_index])
+        logger.info(f"Switched to RPC: {self.rpc_urls[self.rpc_index]}")
+    
     async def check_transaction(self, signature: str) -> Optional[Dict]:
         """Check if transaction is an LP burn"""
         try:
+            # Add delay to avoid rate limits
+            await asyncio.sleep(self.rate_limit_delay)
+            
             # Convert string to Signature object
             sig_obj = Signature.from_string(signature)
             
@@ -268,10 +287,10 @@ class SolanaLPBurnMonitor:
         
         while True:
             try:
-                # Get recent signatures
+                # Get recent signatures with smaller limit to reduce load
                 signatures = await self.solana_client.get_signatures_for_address(
                     Pubkey.from_string(RAYDIUM_AMM_PROGRAM),
-                    limit=10
+                    limit=5  # Reduced from 10
                 )
                 
                 if signatures and signatures.value:
@@ -295,7 +314,13 @@ class SolanaLPBurnMonitor:
                 
             except Exception as e:
                 error_count += 1
-                logger.error(f"Monitor error (#{error_count}): {e}")
+                
+                if "429" in str(e) or "Too Many Requests" in str(e):
+                    logger.warning(f"Rate limited, rotating RPC and waiting...")
+                    await self.rotate_rpc()
+                    await asyncio.sleep(30)
+                else:
+                    logger.error(f"Monitor error (#{error_count}): {e}")
                 
                 if error_count > 10:
                     logger.error("Too many errors, waiting 60s...")
@@ -390,7 +415,7 @@ if __name__ == "__main__":
     print(f"\n✅ Configuration loaded:")
     print(f"  Bot Token: {'*' * 10}{TELEGRAM_BOT_TOKEN[-10:] if TELEGRAM_BOT_TOKEN else 'NOT SET'}")
     print(f"  Channel: {TELEGRAM_CHANNEL_ID}")
-    print(f"  RPC: {SOLANA_RPC_URL}")
+    print(f"  RPC: {RPC_URLS[0]}")
     print(f"  Interval: {CHECK_INTERVAL}s")
     print(f"  Min Burn: {MIN_BURN_PERCENT}%")
     print("=" * 50)
